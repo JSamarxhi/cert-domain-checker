@@ -4,6 +4,7 @@
 variable "subscription_id" {
   description = "Azure subscription ID to deploy into. Find it with: az account show --query id -o tsv"
   type        = string
+  default     = null
 }
 
 variable "location" {
