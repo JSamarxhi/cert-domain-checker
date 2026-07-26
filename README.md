@@ -1,7 +1,12 @@
 # Cert & Domain Expiry Checker
 
-A small HTTP service that reports **SSL/TLS certificate expiry** and **DNS
-resolution status** for a list of domains.
+![Build and Deploy](https://github.com/JSamarxhi/cert-domain-checker/actions/workflows/deploy.yml/badge.svg)
+
+An HTTP service that reports **SSL/TLS certificate expiry** and **DNS resolution
+status** for a list of domains, deployed to Azure Container Apps from a fully
+automated pipeline.
+
+**Live demo:** https://ca-cert-checker.yellowsmoke-5b4ceb7b.eastus.azurecontainerapps.io/docs
 
 Expired certificates are a recurring and entirely preventable cause of outages.
 They fail silently until the moment they take a site down. This service exposes
@@ -27,7 +32,8 @@ pipeline instead of inventing a problem to solve.
 | --- | --- |
 | Application | Python 3.12, FastAPI |
 | Container | Docker |
-| Infrastructure | Terraform, Azure |
+| Registry | GitHub Container Registry |
+| Infrastructure | Terraform, Azure Container Apps |
 | CI/CD | GitHub Actions |
 
 ## API
@@ -42,7 +48,7 @@ pipeline instead of inventing a problem to solve.
 **Example**
 
 ```bash
-curl -X POST http://localhost:8000/check \
+curl -X POST https://ca-cert-checker.yellowsmoke-5b4ceb7b.eastus.azurecontainerapps.io/check \
   -H "Content-Type: application/json" \
   -d '{"domains": ["example.com"]}'
 ```
@@ -68,7 +74,7 @@ curl -X POST http://localhost:8000/check \
 
 The certificate and DNS checks use only the Python standard library (`ssl` and
 `socket`), so the runtime dependency surface is limited to the web framework.
-Failed lookups return a structured error per domain rather than failing the
+Failed lookups return a structured error for that domain rather than failing the
 whole request.
 
 ## Running locally
@@ -95,13 +101,63 @@ The image runs as a non-root user, and dependencies install in a separate layer
 from the application code so that editing source does not invalidate the
 dependency cache on rebuild.
 
+## Deployment
+
+Pushing to `main` triggers a GitHub Actions workflow that builds the image,
+pushes it to GitHub Container Registry, and applies the Terraform configuration
+in `terraform/` against that specific image.
+
+Three decisions worth calling out:
+
+**No stored credentials.** GitHub authenticates to Azure using OpenID Connect
+workload identity federation. GitHub issues a short-lived token describing the
+workflow run, and Entra ID is configured to trust that issuer for this
+repository and branch specifically, using immutable repository identifiers so
+the trust survives a rename and cannot be inherited by a re-registered
+username. No client secret exists in the repository or in repository settings.
+
+**Immutable image tags.** Deployments reference the commit SHA rather than
+`latest`, so any running revision maps to exactly one commit.
+
+**Remote state.** Terraform state lives in Azure Blob Storage so local runs and
+CI runs share the same state, with blob leasing providing lock safety. The
+storage account is created outside Terraform, since state cannot manage the
+location of its own storage.
+
+### One-time setup
+
+```bash
+./scripts/bootstrap-state.sh                     # create the state storage account
+./scripts/setup-oidc.sh <owner>/<repo>           # create the federated identity
+```
+
+Then fill the printed values into `terraform/backend.tf` and set the three
+repository secrets the second script prints.
+
+### Cost
+
+The application scales to zero when idle and runs inside the Azure Container
+Apps monthly free grant. The only persistent resource with a nonzero cost is the
+few kilobytes of Terraform state in Blob Storage. Environments can be recreated
+or torn down entirely with `terraform apply` and `terraform destroy`.
+
 ## Project layout
 
 ```
 .
 ├── app/
-│   ├── main.py       # FastAPI routes and request/response models
-│   └── checker.py    # SSL expiry and DNS resolution logic
+│   ├── main.py           # FastAPI routes and request/response models
+│   └── checker.py        # SSL expiry and DNS resolution logic
+├── terraform/            # Azure infrastructure as code
+│   ├── main.tf           # resource group, log analytics, container app
+│   ├── variables.tf
+│   ├── outputs.tf
+│   ├── versions.tf       # provider and version pinning
+│   └── backend.tf        # remote state configuration
+├── scripts/              # one-time bootstrap for state and OIDC
+├── .github/
+│   └── workflows/
+│       └── deploy.yml    # build, push, and deploy pipeline
 ├── Dockerfile
 ├── requirements.txt
 └── README.md
@@ -111,8 +167,8 @@ dependency cache on rebuild.
 
 - [x] FastAPI application with SSL and DNS checks
 - [x] Containerized with Docker
-- [ ] Deployed to Azure Container Apps
-- [ ] Infrastructure defined in Terraform, with environments created and
-      destroyed from code each session
-- [ ] Build and deploy automated via GitHub Actions
+- [x] Deployed to Azure Container Apps
+- [x] Infrastructure defined in Terraform
+- [x] Build and deploy automated via GitHub Actions
+- [x] Passwordless CI authentication via OIDC federated identity
 - [ ] Scheduled checks with alerting on approaching expiry
