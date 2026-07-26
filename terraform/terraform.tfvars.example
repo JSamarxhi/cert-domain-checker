@@ -1,0 +1,11 @@
+# Copy this to terraform.tfvars and fill in your subscription ID:
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored. It holds environment-specific values and
+# should not be committed.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+# Optional overrides:
+# location        = "eastus"
+# container_image = "ghcr.io/jsamarxhi/cert-checker:latest"
