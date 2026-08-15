@@ -1,55 +1,56 @@
-# ---------------------------------------------------------------------------
-# Resource group
-#
-# A container for everything below. Deleting it deletes all of it, which is
-# what the portal did manually. Terraform will manage that lifecycle instead.
-# ---------------------------------------------------------------------------
+terraform {
+  required_version = ">= 1.9"
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+  }
+  backend "azurerm" {
+    resource_group_name  = "rg-tfstate"
+    storage_account_name = "sttfstatejsamarxhi"
+    container_name       = "tfstate"
+    key                  = "cert-checker.tfstate"
+  }
+}
+
+provider "azurerm" {
+  features {}
+}
+
+variable "prefix" {
+  description = "Name prefix applied to every resource, so they group together and don't collide."
+  type        = string
+  default     = "cert-checker"
+}
+
+variable "container_image" {
+  description = "Fully qualified container image to deploy."
+  type        = string
+  default     = "ghcr.io/jsamarxhi/cert-checker:latest"
+}
+
+variable "target_port" {
+  description = "Port the container listens on. Must match EXPOSE/uvicorn in the Dockerfile."
+  type        = number
+  default     = 8000
+}
+
 resource "azurerm_resource_group" "main" {
   name     = "rg-${var.prefix}"
-  location = var.location
+  location = "eastus"
 }
 
-# ---------------------------------------------------------------------------
-# Log Analytics workspace
-#
-# Container Apps sends stdout/stderr here. The portal created this implicitly
-# when it built the environment. Declaring it explicitly means it is visible,
-# versioned, and destroyed along with everything else.
-# ---------------------------------------------------------------------------
-resource "azurerm_log_analytics_workspace" "main" {
-  name                = "log-${var.prefix}"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  sku                 = "PerGB2018" # pay per GB ingested; 5GB/month is free
-  retention_in_days   = 30
+data "azurerm_container_app_environment" "shared" {
+  name                = "cae-platform"
+  resource_group_name = "rg-platform"
 }
 
-# ---------------------------------------------------------------------------
-# Container Apps environment
-#
-# The shared boundary that container apps run inside: networking, logging,
-# and the scaling infrastructure.
-# ---------------------------------------------------------------------------
-resource "azurerm_container_app_environment" "main" {
-  name                = "cae-${var.prefix}"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-
-  # Referencing another resource's attribute creates an implicit dependency.
-  # Terraform reads these references to work out the correct creation order.
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
-}
-
-# ---------------------------------------------------------------------------
-# The container app itself
-# ---------------------------------------------------------------------------
 resource "azurerm_container_app" "main" {
   name                         = "ca-${var.prefix}"
   resource_group_name          = azurerm_resource_group.main.name
-  container_app_environment_id = azurerm_container_app_environment.main.id
+  container_app_environment_id = data.azurerm_container_app_environment.shared.id
 
-  # "Single" = one active revision at a time. New deploys replace the old one.
-  # "Multiple" would allow blue/green and traffic splitting.
   revision_mode = "Single"
 
   template {
@@ -76,4 +77,24 @@ resource "azurerm_container_app" "main" {
       percentage      = 100
     }
   }
+}
+
+output "app_url" {
+  description = "Public URL of the running service."
+  value       = "https://${azurerm_container_app.main.ingress[0].fqdn}"
+}
+
+output "health_url" {
+  description = "Health endpoint, for a quick post-deploy check."
+  value       = "https://${azurerm_container_app.main.ingress[0].fqdn}/health"
+}
+
+output "docs_url" {
+  description = "Interactive API documentation."
+  value       = "https://${azurerm_container_app.main.ingress[0].fqdn}/docs"
+}
+
+output "resource_group_name" {
+  description = "Resource group holding every resource in this configuration."
+  value       = azurerm_resource_group.main.name
 }
